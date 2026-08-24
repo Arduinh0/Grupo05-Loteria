@@ -10,6 +10,26 @@
 #include <string.h>     // Operações com strings
 #include <unistd.h>     // Chamadas de sistema UNIX como close() e sleep()
 
+// Estados Globais da Loteria
+#define MAX_APOSTAS 100
+#define MAX_NUMS 20
+
+typedef struct {
+    int num[MAX_NUMS];
+    int qtd_n;
+} Aposta;
+
+// Configuração Padrão da Loteria
+int config_i = 0;
+int config_f = 100;
+int config_qtd = 5;
+
+Aposta lista_apostas[MAX_APOSTAS];
+int total_apostas = 0;
+
+// Mutex para evitar concorrência de leitura e escrita
+pthread_mutex_t m_loteria = PTHREAD_MUTEX_INITIALIZER;
+
 // Thread 1: Fica em loop aguardando mensagens enviadas pelo cliente
 void* receber_dados_cliente(void* arg) {
     int clientSocket = *(int*)arg;
@@ -17,21 +37,61 @@ void* receber_dados_cliente(void* arg) {
     int bytes_recebidos;
 
     while (1) {
-        // Aguarda recebimento de mensagens do cliente
         bytes_recebidos = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
-        
-        // Verifica se a conexão com o cliente foi encerrada (retorno 0) ou se houve erro (retorno -1)
+
         if (bytes_recebidos <= 0) {
-            printf("\nCliente desconectado ou ocorreu um erro na rede.\n");
+            printf("\n[Sistema] Cliente desconectado ou erro de rede.\n");
             close(clientSocket);
-            break; // Sai do loop para finalizar a thread de recebimento
+            break;
         }
-        
-        // Adiciona terminador nulo na string recebida para exibir corretamente
+
         buffer[bytes_recebidos] = '\0';
         
-        // Imprime a mensagem no terminal do servidor (apenas para efeitos de debug)
-        printf("[Debug] Mensagem recebida do cliente: %s\n", buffer);
+        // Trava o Mutex antes de ler/alterar as globais
+        pthread_mutex_lock(&m_loteria);
+
+        // Verifica se a string recebida é um comando (inicia com ':')
+        if (buffer[0] == ':') {
+            int valor;
+            if (sscanf(buffer, ":inicio %d", &valor) == 1) {
+                config_i = valor;
+                printf("[Config] Inicio alterado para: %d\n", config_i);
+            } 
+            else if (sscanf(buffer, ":fim %d", &valor) == 1) {
+                config_f = valor;
+                printf("[Config] Fim alterado para: %d\n", config_f);
+            } 
+            else if (sscanf(buffer, ":qtd %d", &valor) == 1) {
+                config_qtd = valor;
+                printf("[Config] Qtd de numeros sorteados alterada para: %d\n", config_qtd);
+            }
+        } 
+        // Se não for comando, interpreta como uma aposta (números separados por espaço)
+        else {
+            if (total_apostas < MAX_APOSTAS) {
+                Aposta nova_aposta;
+                nova_aposta.qtd_n = 0;
+
+                // Divide a string pelos espaços
+                char* token = strtok(buffer, " ");
+                while (token != NULL && nova_aposta.qtd_n < MAX_NUMS) {
+                    nova_aposta.num[nova_aposta.qtd_n] = atoi(token);
+                    nova_aposta.qtd_n++;
+                    token = strtok(NULL, " ");
+                }
+
+                lista_apostas[total_apostas] = nova_aposta;
+                total_apostas++;
+                
+                printf("[Aposta] Aposta %d registrada com %d numero(s).\n", 
+                        total_apostas, nova_aposta.qtd_n);
+            } else {
+                printf("[Aposta] Limite maximo de apostas atingido.\n");
+            }
+        }
+
+        // Libera o Mutex após a manipulação segura dos dados
+        pthread_mutex_unlock(&m_loteria);
     }
     return NULL;
 }
