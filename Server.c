@@ -96,17 +96,96 @@ void* receber_dados_cliente(void* arg) {
     return NULL;
 }
 
-// Thread 2: Temporizador do sorteio que aguarda 60 segundos antes de avisar
 void* temporizador_sorteio(void* arg) {
-    int clientSocket = *(int*)arg;
-    char msg_sorteio[] = "Sorteio realizado!";
+    int clientSocket = *((int*)arg);
+    char msg_sorteio[2048]; // Buffer grande para caber todo o "boletim"
+    char temp[100];         // Buffer temporário para formatar números pequenos
 
-    while (1) {
-        sleep(60); // Aguarda 60 segundos
-        
-        // Envia a mensagem ao cliente de forma assíncrona
+    // Inicializa a semente aleatória usando a hora atual do sistema
+    srand(time(NULL));
+
+    while(1) {
+        sleep(60);
+
+        int sorteados[100]; // Vetor para guardar os números desta rodada
+        int min = config_i;
+        int max = config_f;
+        int qtd = config_qtd;
+
+        // Trava de segurança: se a quantidade de números exigida for maior
+        // que o intervalo disponível, ajustamos para evitar um loop infinito
+        if (qtd > (max - min + 1)) {
+            qtd = max - min + 1;
+        }
+
+        for (int i = 0; i < qtd; i++) {
+            int numero;
+            int repetido;
+            do {
+                repetido = 0;
+                // Fórmula para gerar número num intervalo fechado: [min, max]
+                numero = min + rand() % (max - min + 1);
+                
+                // Verifica se o número já saiu nos sorteios anteriores deste ciclo
+                for (int j = 0; j < i; j++) {
+                    if (sorteados[j] == numero) {
+                        repetido = 1;
+                        break; // Para de procurar, já achou repetição
+                    }
+                }
+            } while (repetido); // Se for repetido, gera outro número
+            
+            sorteados[i] = numero;
+        }
+
+        pthread_mutex_lock(&m_loteria);
+
+        // Limpa a string principal antes de começar a montá-la
+        memset(msg_sorteio, 0, sizeof(msg_sorteio));
+        strcat(msg_sorteio, "\n=== RESULTADO DA LOTERIA ===\nNumeros Sorteados: ");
+
+        // Anexa os números sorteados ao texto
+        for (int i = 0; i < qtd; i++) {
+            sprintf(temp, "%d ", sorteados[i]);
+            strcat(msg_sorteio, temp);
+        }
+        strcat(msg_sorteio, "\n\nSua Apuracao:\n");
+
+        if (total_apostas == 0) {
+            strcat(msg_sorteio, "-> Voce nao fez nenhuma aposta nesta rodada.\n");
+        } else {
+            // Percorre todas as apostas salvas
+            for (int i = 0; i < total_apostas; i++) {
+                int acertos = 0;
+                sprintf(temp, "Aposta %d [ ", i + 1);
+                strcat(msg_sorteio, temp);
+
+                // Percorre os números de uma aposta específica
+                for (int j = 0; j < lista_apostas[i].qtd_n; j++) {
+                    int num_apostado = lista_apostas[i].num[j];
+                    sprintf(temp, "%d ", num_apostado);
+                    strcat(msg_sorteio, temp);
+
+                    // Checa se esse número apostado está entre os sorteados
+                    for (int k = 0; k < qtd; k++) {
+                        if (num_apostado == sorteados[k]) {
+                            acertos++;
+                            break;
+                        }
+                    }
+                }
+                // Adiciona o resultado da aposta ao texto
+                sprintf(temp, "] -> Voce acertou %d numero(s)!\n", acertos);
+                strcat(msg_sorteio, temp);
+            }
+        }
+        strcat(msg_sorteio, "============================\n");
+
+        total_apostas = 0; 
+
+        pthread_mutex_unlock(&m_loteria);
+
         send(clientSocket, msg_sorteio, strlen(msg_sorteio), 0);
-        printf("[Sorteio] Mensagem de sorteio enviada ao cliente com sucesso.\n");
     }
     return NULL;
 }
