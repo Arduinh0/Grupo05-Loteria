@@ -8,10 +8,30 @@
 #include <pthread.h>    // API POSIX de Threads
 #include <string.h>     // Operações com strings
 #include <unistd.h>     // Chamadas de sistema UNIX como close() e sleep()
+#include <signal.h>     // Tratamento de sinais (Ctrl+C)
+
+// Variável global do socket para permitir o fechamento no tratador de sinal
+int sockD = -1;
+
+// Função para tratar o Ctrl+C (Encerramento Gracioso via Sinal)
+void handle_sigint(int sig) {
+    // Usamos write em vez de printf dentro de um signal handler por segurança (async-signal-safe)
+    char msg[] = "\n[Sinal] Capturado SIGINT (Ctrl+C). Encerrando o cliente forçadamente...\n";
+    write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+    
+    // 1 e 2. Fecha o socket que agora é global, garantindo que o servidor perceba a queda
+    if (sockD != -1) {
+        close(sockD);
+    }
+    
+    // A thread do 'fgets' retém um 'lock' no stdin (I/O bloqueante). 
+    // Chamar exit(0) tenta fazer flush nos buffers do stdio e causa DEADLOCK!
+    // Por isso o programa congelava. Usamos _exit(0) para finalizar o processo de fato e imediatamente.
+    _exit(0);
+}
 
 // Thread 1: Fica em loop lendo do teclado e enviando mensagens ao servidor
 void* enviar_mensagem(void* arg) {
-    int sockD = *(int*)arg;
     char buffer[255];
 
     while (1) {
@@ -29,8 +49,7 @@ void* enviar_mensagem(void* arg) {
 
 // Thread 2: Fica em loop aguardando e imprimindo mensagens vindas do servidor
 void* receber_mensagem(void* arg) {
-    int sockD = *(int*)arg;
-    char buffer[255];
+    char buffer[2048]; // Aumentado para suportar o boletim completo do servidor
     int bytes_recebidos;
 
     while (1) {
@@ -41,7 +60,10 @@ void* receber_mensagem(void* arg) {
         if (bytes_recebidos <= 0) {
             printf("\nServidor desconectado. Encerrando o cliente...\n");
             close(sockD);
-            exit(0); // Encerra a aplicação do cliente com sucesso
+            // O uso de exit(0) é mantido aqui porque a Thread 1 ficará bloqueada eternamente 
+            // no fgets() (I/O bloqueante) aguardando o usuário digitar algo. 
+            // Para interromper o programa, chamamos exit().
+            exit(0);
         }
         
         // Finaliza a string de forma segura
@@ -53,7 +75,10 @@ void* receber_mensagem(void* arg) {
 
 int main(int argc, char const* argv[])
 {
-    int sockD = socket(AF_INET, SOCK_STREAM, 0);
+    // Registra o tratador do sinal SIGINT
+    signal(SIGINT, handle_sigint);
+
+    sockD = socket(AF_INET, SOCK_STREAM, 0);
 
     struct sockaddr_in servAddr;
 
@@ -80,10 +105,10 @@ int main(int argc, char const* argv[])
         pthread_t thread_envio, thread_recebimento;
         
         // Criando a Thread 1 (envio de dados)
-        pthread_create(&thread_envio, NULL, enviar_mensagem, (void*)&sockD);
+        pthread_create(&thread_envio, NULL, enviar_mensagem, NULL);
         
         // Criando a Thread 2 (recebimento de dados)
-        pthread_create(&thread_recebimento, NULL, receber_mensagem, (void*)&sockD);
+        pthread_create(&thread_recebimento, NULL, receber_mensagem, NULL);
         
         // O main usa pthread_join para aguardar a execução das threads, 
         // evitando que o programa termine prematuramente.
@@ -91,5 +116,6 @@ int main(int argc, char const* argv[])
         pthread_join(thread_recebimento, NULL);
     }
 
+    printf("Programa cliente finalizado.\n");
     return 0;
 }
