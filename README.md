@@ -31,7 +31,7 @@ Abra o terminal na pasta raiz do projeto e execute os seguintes comandos:
 
 ```bash
 # Compilando o Servidor (Fase 2)
-gcc Server_6.c -o Server -pthread
+gcc Server.c -o Server -pthread
 
 # Compilando o Cliente
 gcc Client.c -o Client -pthread
