@@ -40,8 +40,15 @@ void* enviar_mensagem(void* arg) {
             // Remove a quebra de linha (\n) lida pelo fgets, caso exista
             buffer[strcspn(buffer, "\n")] = '\0';
             
-            // Envia a mensagem ao servidor
+            // Envia a mensagem ao servidor (cegamente, incluindo o comando de saída)
             send(sockD, buffer, strlen(buffer), 0);
+            
+            // Verifica localmente se a mensagem enviada foi o comando de saída
+            if (strncmp(buffer, ":quit", 5) == 0) {
+                printf("\n[Sistema] Desconectando do servidor e encerrando o cliente...\n");
+                close(sockD);
+                exit(0);
+            }
         }
     }
     return NULL;
