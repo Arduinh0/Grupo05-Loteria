@@ -1,9 +1,9 @@
 /*Código base obtido no site: https://www.geeksforgeeks.org/computer-networks/simple-client-server-application-in-c/*/
 
-#include <netinet/in.h> //structure for storing address information
+#include <netinet/in.h> // Estrutura para armazenar informação dos endereços
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/socket.h> //for socket APIs
+#include <sys/socket.h> // APIs de Socket
 #include <sys/types.h>
 #include <pthread.h>    // API POSIX de Threads
 #include <string.h>     // Operações com strings
@@ -13,35 +13,38 @@
 // Variável global do socket para permitir o fechamento no tratador de sinal
 int sockD = -1;
 
-// Função para tratar o Ctrl+C (Encerramento Gracioso via Sinal)
+// Função para tratar o encerramento forçado
 void handle_sigint(int sig) {
-    // Usamos write em vez de printf dentro de um signal handler por segurança (async-signal-safe)
+    (void)sig; // Evita warning de unused parameter
     char msg[] = "\n[Sinal] Capturado SIGINT (Ctrl+C). Encerrando o cliente forçadamente...\n";
     write(STDOUT_FILENO, msg, sizeof(msg) - 1);
     
-    // 1 e 2. Fecha o socket que agora é global, garantindo que o servidor perceba a queda
+    // Fecha o socket
     if (sockD != -1) {
         close(sockD);
     }
-    
-    // A thread do 'fgets' retém um 'lock' no stdin (I/O bloqueante). 
-    // Chamar exit(0) tenta fazer flush nos buffers do stdio e causa DEADLOCK!
-    // Por isso o programa congelava. Usamos _exit(0) para finalizar o processo de fato e imediatamente.
+
     _exit(0);
 }
 
-// Thread 1: Fica em loop lendo do teclado e enviando mensagens ao servidor
+// Thread 1: Loop lendo do teclado e enviando mensagens ao servidor
 void* enviar_mensagem(void* arg) {
+    (void)arg; // Evita warning de unused parameter
     char buffer[255];
 
     while (1) {
-        // Lê a entrada do usuário pelo terminal
+        // Lê o input
         if (fgets(buffer, sizeof(buffer), stdin) != NULL) {
-            // Remove a quebra de linha (\n) lida pelo fgets, caso exista
+            // Remove a quebra de linha
             buffer[strcspn(buffer, "\n")] = '\0';
             
-            // Envia a mensagem ao servidor (cegamente, incluindo o comando de saída)
-            send(sockD, buffer, strlen(buffer), 0);
+            // Envia a mensagem ao servidor
+            int bytes_enviados = send(sockD, buffer, strlen(buffer), 0);
+            if (bytes_enviados < 0) {
+                printf("\n[Erro] Falha ao enviar a mensagem. Conexao com o servidor perdida.\n");
+                close(sockD);
+                exit(1);
+            }
             
             // Verifica localmente se a mensagem enviada foi o comando de saída
             if (strncmp(buffer, ":quit", 5) == 0) {
@@ -54,34 +57,39 @@ void* enviar_mensagem(void* arg) {
     return NULL;
 }
 
-// Thread 2: Fica em loop aguardando e imprimindo mensagens vindas do servidor
+// Thread 2: Loop aguardando e imprimindo mensagens vindas do servidor
 void* receber_mensagem(void* arg) {
-    char buffer[2048]; // Aumentado para suportar o boletim completo do servidor
+    (void)arg; // Evita warning de unused parameter
+    char buffer[2048];
     int bytes_recebidos;
 
     while (1) {
         // Aguarda recebimento de mensagens
         bytes_recebidos = recv(sockD, buffer, sizeof(buffer) - 1, 0);
         
-        // Verifica se a conexão com o servidor foi encerrada (retorno 0) ou se houve erro (retorno -1)
+        // Verifica se a conexão com o servidor foi encerrada (0) ou se houve erro (-1)
         if (bytes_recebidos <= 0) {
             printf("\nServidor desconectado. Encerrando o cliente...\n");
             close(sockD);
-            // O uso de exit(0) é mantido aqui porque a Thread 1 ficará bloqueada eternamente 
-            // no fgets() (I/O bloqueante) aguardando o usuário digitar algo. 
-            // Para interromper o programa, chamamos exit().
             exit(0);
         }
         
-        // Finaliza a string de forma segura
+        // Finaliza a string
         buffer[bytes_recebidos] = '\0';
-        printf("Mensagem: %s\n", buffer);
+        printf("%s\n", buffer);
     }
     return NULL;
 }
 
 int main(int argc, char const* argv[])
 {
+    // Evita warnings do compilador para variaveis nao utilizadas
+    (void)argc;
+    (void)argv;
+
+    // Ignora o sinal SIGPIPE para evitar crash se o servidor cair durante um envio
+    signal(SIGPIPE, SIG_IGN);
+
     // Registra o tratador do sinal SIGINT
     signal(SIGINT, handle_sigint);
 
@@ -90,35 +98,35 @@ int main(int argc, char const* argv[])
     struct sockaddr_in servAddr;
 
     servAddr.sin_family = AF_INET;
-    servAddr.sin_port = htons(9001); // use some unused port number
+    servAddr.sin_port = htons(9001);
     servAddr.sin_addr.s_addr = INADDR_ANY;
 
     int connectStatus = connect(sockD, (struct sockaddr*)&servAddr, sizeof(servAddr));
 
     if (connectStatus == -1) {
-        printf("Error...\n");
+        perror("\n[Erro] Falha ao conectar ao servidor");
+        exit(1);
     }
     else {
-        char strData[255];
+        char strData[1024];
 
-        // Aguarda receber a mensagem inicial de "CONECTADO!!"
+        // Aguarda receber a mensagem inicial
         int bytes = recv(sockD, strData, sizeof(strData) - 1, 0);
         if (bytes > 0) {
             strData[bytes] = '\0';
-            printf("Message: %s\n", strData);
+            printf("\n%s\n", strData);
         }
 
-        // Variáveis que vão armazenar os identificadores das threads
+        // Identificadores das threads
         pthread_t thread_envio, thread_recebimento;
         
-        // Criando a Thread 1 (envio de dados)
+        // Envio de dados
         pthread_create(&thread_envio, NULL, enviar_mensagem, NULL);
         
-        // Criando a Thread 2 (recebimento de dados)
+        // Recebimento de Dados
         pthread_create(&thread_recebimento, NULL, receber_mensagem, NULL);
         
-        // O main usa pthread_join para aguardar a execução das threads, 
-        // evitando que o programa termine prematuramente.
+        // pthread_join para aguardar a execução das threads
         pthread_join(thread_envio, NULL);
         pthread_join(thread_recebimento, NULL);
     }
